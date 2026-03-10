@@ -1,0 +1,560 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no"/>
+<title>ARNav · Cámara Real</title>
+<script src="https://unpkg.com/react@18/umd/react.development.js"></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Sora:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap');
+  *{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent;}
+  body{background:#030810;font-family:'Sora',sans-serif;overflow:hidden;}
+  ::-webkit-scrollbar{display:none;}
+
+  /* Camera video fills screen */
+  #ar-video{
+    position:absolute;inset:0;width:100%;height:100%;
+    object-fit:cover;display:block;
+    transform:scaleX(-1); /* mirror like selfie — remove if back cam */
+  }
+
+  /* AR arrow animations — pulse cascade bottom to top */
+  @keyframes ap0{0%,100%{opacity:.15;transform:translateX(-50%) scaleY(.9)}50%{opacity:1;transform:translateX(-50%) scaleY(1.08)}}
+  @keyframes ap1{0%,100%{opacity:.12;transform:translateX(-50%) scaleY(.9)}50%{opacity:.82;transform:translateX(-50%) scaleY(1.05)}}
+  @keyframes ap2{0%,100%{opacity:.08;transform:translateX(-50%) scaleY(.88)}50%{opacity:.58;transform:translateX(-50%) scaleY(1.02)}}
+  @keyframes ap3{0%,100%{opacity:.04;transform:translateX(-50%) scaleY(.86)}50%{opacity:.3;transform:translateX(-50%) scaleY(1)}}
+
+  /* Floating aisle tag */
+  @keyframes tagFloat{0%,100%{transform:translateX(-50%) translateY(0)}50%{transform:translateX(-50%) translateY(-8px)}}
+  @keyframes blink{0%,100%{opacity:1}50%{opacity:.1}}
+  @keyframes promoPulse{0%,100%{transform:scale(1) rotate(-8deg)}50%{transform:scale(1.12) rotate(-8deg)}}
+  @keyframes donePop{from{transform:scale(0);opacity:0}to{transform:scale(1);opacity:1}}
+  @keyframes pulse{0%,100%{box-shadow:0 0 50px rgba(26,107,245,0.25)}50%{box-shadow:0 0 75px rgba(26,107,245,0.45)}}
+  @keyframes scanLine{0%{top:0%}100%{top:100%}}
+  @keyframes fadeIn{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:translateY(0)}}
+
+  .arrow-0{position:absolute;left:50%;bottom:14%;animation:ap0 1.5s ease-in-out infinite 0s;}
+  .arrow-1{position:absolute;left:50%;bottom:26%;animation:ap1 1.5s ease-in-out infinite .25s;}
+  .arrow-2{position:absolute;left:50%;bottom:36%;animation:ap2 1.5s ease-in-out infinite .5s;}
+
+  .ar-tag{
+    position:absolute;top:18%;left:50%;min-width:200px;text-align:center;
+    background:rgba(7,16,31,0.82);backdrop-filter:blur(18px);
+    border:1.5px solid rgba(26,107,245,0.75);border-radius:16px;padding:12px 28px;
+    animation:tagFloat 2.8s ease-in-out infinite;
+    box-shadow:0 0 24px rgba(26,107,245,0.25),0 8px 32px rgba(0,0,0,0.5);
+  }
+  .blink-dot{display:inline-block;width:7px;height:7px;border-radius:50%;
+    background:#1A6BF5;margin-right:7px;animation:blink 1s infinite;vertical-align:middle;}
+  .hud-blink{display:inline-block;width:6px;height:6px;border-radius:50%;
+    background:#22D47A;animation:blink 1s infinite;margin-right:6px;}
+  .promo-badge{
+    position:absolute;right:16%;top:28%;
+    background:linear-gradient(135deg,#F59E0B,#d97706);
+    border-radius:50%;width:58px;height:58px;
+    display:flex;flex-direction:column;align-items:center;justify-content:center;
+    font-family:'JetBrains Mono',monospace;font-weight:700;color:#000;
+    box-shadow:0 0 20px rgba(245,158,11,0.6);animation:promoPulse 2.2s ease-in-out infinite;
+  }
+  .dist-badge{
+    position:absolute;top:38%;left:50%;transform:translateX(-50%);
+    background:rgba(7,16,31,0.88);border:1px solid rgba(26,107,245,0.5);
+    border-radius:24px;padding:6px 20px;
+    font-family:'JetBrains Mono',monospace;font-size:13px;color:#4D8EF7;
+    box-shadow:0 4px 16px rgba(0,0,0,0.4);
+  }
+
+  /* Corner scan brackets */
+  .sc{position:absolute;width:30px;height:30px;border-color:rgba(26,107,245,.7);border-style:solid;}
+  .sc-tl{top:60px;left:14px;border-width:2.5px 0 0 2.5px;border-radius:5px 0 0 0;}
+  .sc-tr{top:60px;right:14px;border-width:2.5px 2.5px 0 0;border-radius:0 5px 0 0;}
+  .sc-bl{bottom:218px;left:14px;border-width:0 0 2.5px 2.5px;border-radius:0 0 0 5px;}
+  .sc-br{bottom:218px;right:14px;border-width:0 2.5px 2.5px 0;border-radius:0 0 5px 0;}
+
+  /* Scan line sweep */
+  .scan-line{
+    position:absolute;left:0;right:0;height:2px;
+    background:linear-gradient(90deg,transparent,rgba(26,107,245,0.6),transparent);
+    animation:scanLine 3s linear infinite;pointer-events:none;
+  }
+
+  .done-ring{animation:donePop .5s cubic-bezier(.34,1.56,.64,1) forwards;}
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const { useState, useRef, useEffect, useCallback } = React;
+
+const CATALOG = [
+  { cat:"🥛 Lácteos", items:[
+    {name:"Leche entera",  emoji:"🥛",aisle:"Pasillo 3",sect:"Sección A",tag:"Lácteos",    dist:12,promo:false},
+    {name:"Queso Oaxaca",  emoji:"🧀",aisle:"Pasillo 3",sect:"Sección B",tag:"Lácteos",    dist:14,promo:true,promoTxt:"-15%"},
+    {name:"Yogurt natural",emoji:"🫙",aisle:"Pasillo 3",sect:"Sección C",tag:"Lácteos",    dist:13,promo:false},
+    {name:"Mantequilla",   emoji:"🧈",aisle:"Pasillo 3",sect:"Sección A",tag:"Lácteos",    dist:12,promo:false},
+  ]},
+  { cat:"🍞 Panadería", items:[
+    {name:"Pan integral",  emoji:"🍞",aisle:"Pasillo 1",sect:"Sección A",tag:"Panadería",  dist:18,promo:false},
+    {name:"Bolillos",      emoji:"🥖",aisle:"Pasillo 1",sect:"Sección B",tag:"Panadería",  dist:20,promo:true,promoTxt:"-10%"},
+    {name:"Tortillas maíz",emoji:"🫓",aisle:"Pasillo 1",sect:"Sección C",tag:"Panadería",  dist:17,promo:false},
+  ]},
+  { cat:"🥣 Cereales", items:[
+    {name:"Avena",         emoji:"🌾",aisle:"Pasillo 5",sect:"Sección A",tag:"Cereales",   dist:9, promo:false},
+    {name:"Cereal de maíz",emoji:"🥣",aisle:"Pasillo 5",sect:"Sección B",tag:"Cereales",   dist:10,promo:true,promoTxt:"-20%"},
+    {name:"Granola",       emoji:"🫙",aisle:"Pasillo 5",sect:"Sección C",tag:"Cereales",   dist:11,promo:false},
+  ]},
+  { cat:"🥚 Huevo & Proteína", items:[
+    {name:"Huevos blancos",emoji:"🥚",aisle:"Pasillo 3",sect:"Sección D",tag:"Refrigerados",dist:6,promo:false},
+    {name:"Pechuga pollo", emoji:"🍗",aisle:"Pasillo 6",sect:"Sección A",tag:"Carnes",     dist:22,promo:true,promoTxt:"-25%"},
+  ]},
+  { cat:"🍎 Frutas & Verduras", items:[
+    {name:"Manzana roja",  emoji:"🍎",aisle:"Pasillo 2",sect:"Sección A",tag:"Frutas",     dist:8, promo:false},
+    {name:"Plátano",       emoji:"🍌",aisle:"Pasillo 2",sect:"Sección B",tag:"Frutas",     dist:7, promo:false},
+    {name:"Aguacate",      emoji:"🥑",aisle:"Pasillo 2",sect:"Sección C",tag:"Verduras",   dist:9, promo:true,promoTxt:"-30%"},
+    {name:"Jitomate",      emoji:"🍅",aisle:"Pasillo 2",sect:"Sección D",tag:"Verduras",   dist:8, promo:false},
+  ]},
+];
+
+/* ── AR Camera View ─────────────────────────────────────── */
+function CameraView({ cur, queue, qIdx, collected, btnOk, toastOn, toast, prog, onCollect, onBack }) {
+  const videoRef = useRef(null);
+  const [camError, setCamError] = useState(null);
+  const [camReady, setCamReady] = useState(false);
+  const [liveDist, setLiveDist] = useState(null);
+  const distRef = useRef(null);
+  const motionRef = useRef({ lastAcc: null, totalDist: 0, lastTime: null });
+
+  // Motion sensor: accelerometer → estimate distance walked
+  useEffect(() => {
+    if (!cur || !cur.dist) return;
+    setLiveDist(cur.dist);
+    distRef.current = cur.dist;
+    motionRef.current = { lastAcc: null, totalDist: 0, lastTime: null };
+
+    let velocity = 0;
+    const STEP_THRESHOLD = 1.8; // m/s² — tune for sensitivity
+    const DECAY = 0.85;
+
+    function handleMotion(e) {
+      const acc = e.accelerationIncludingGravity || e.acceleration;
+      if (!acc) return;
+      const now = Date.now();
+      const { lastAcc, lastTime } = motionRef.current;
+      if (!lastAcc || !lastTime) {
+        motionRef.current.lastAcc = acc;
+        motionRef.current.lastTime = now;
+        return;
+      }
+      const dt = (now - lastTime) / 1000; // seconds
+      if (dt <= 0) return;
+
+      // Magnitude of acceleration change (jerk) → proxy for forward motion
+      const dx = (acc.x || 0) - (lastAcc.x || 0);
+      const dy = (acc.y || 0) - (lastAcc.y || 0);
+      const dz = (acc.z || 0) - (lastAcc.z || 0);
+      const jerk = Math.sqrt(dx*dx + dy*dy + dz*dz);
+
+      if (jerk > STEP_THRESHOLD) {
+        // Each detected "step" reduces distance by ~0.7m
+        const stepDist = 0.7;
+        motionRef.current.totalDist += stepDist;
+        const newDist = Math.max(0.5, distRef.current - motionRef.current.totalDist);
+        setLiveDist(parseFloat(newDist.toFixed(1)));
+      }
+
+      motionRef.current.lastAcc = acc;
+      motionRef.current.lastTime = now;
+    }
+
+    // iOS 13+ requires permission
+    if (typeof DeviceMotionEvent !== 'undefined' && typeof DeviceMotionEvent.requestPermission === 'function') {
+      DeviceMotionEvent.requestPermission().then(state => {
+        if (state === 'granted') window.addEventListener('devicemotion', handleMotion);
+      }).catch(() => {});
+    } else {
+      window.addEventListener('devicemotion', handleMotion);
+    }
+
+    return () => window.removeEventListener('devicemotion', handleMotion);
+  }, [cur && cur.name]);
+
+  useEffect(() => {
+    let stream = null;
+    async function startCam() {
+      try {
+        // Prefer back camera on mobile
+        stream = await navigator.mediaDevices.getUserMedia({
+          video: {
+            facingMode: { ideal: "environment" },
+            width: { ideal: 1280 },
+            height: { ideal: 720 }
+          },
+          audio: false
+        });
+        if (videoRef.current) {
+          videoRef.current.srcObject = stream;
+          videoRef.current.onloadedmetadata = () => {
+            videoRef.current.play();
+            setCamReady(true);
+          };
+        }
+      } catch (err) {
+        console.error(err);
+        if (err.name === "NotAllowedError") {
+          setCamError("permission");
+        } else {
+          setCamError("unavailable");
+        }
+      }
+    }
+    startCam();
+    return () => {
+      if (stream) stream.getTracks().forEach(t => t.stop());
+    };
+  }, []);
+
+  const ARROWS = [
+    {cls:"arrow-0", w:90, h:60, op:1.0,  pts:"45,3 87,57 3,57"},
+    {cls:"arrow-1", w:58, h:38, op:0.9,  pts:"29,3 55,35 3,35"},
+    {cls:"arrow-2", w:34, h:23, op:0.75, pts:"17,2 32,21 2,21"},
+  ];
+
+  const S = {
+    hud:{position:"absolute",top:0,left:0,right:0,zIndex:4,
+      padding:"12px 18px 10px",
+      background:"linear-gradient(to bottom,rgba(7,16,31,.90) 60%,transparent)",
+      display:"flex",alignItems:"center",justifyContent:"space-between"},
+    panel:{position:"absolute",bottom:0,left:0,right:0,zIndex:4,
+      background:"rgba(7,16,31,.95)",backdropFilter:"blur(12px)",
+      borderTop:"1px solid rgba(26,107,245,0.4)",padding:"14px 20px 30px"},
+    collectBtn:{width:"100%",padding:14,borderRadius:14,border:"none",
+      fontFamily:"'Sora',sans-serif",fontSize:15,fontWeight:600,cursor:"pointer",
+      transition:"all .2s",
+      background:btnOk?"linear-gradient(135deg,#22D47A,#18a85e)":"linear-gradient(135deg,#1A6BF5,#1050C8)",
+      color:"#fff",
+      boxShadow:btnOk?"0 4px 18px rgba(34,212,122,.4)":"0 4px 18px rgba(26,107,245,0.4)"},
+  };
+
+  // Error state
+  if (camError) {
+    return (
+      <div style={{flex:1,background:"#07101F",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",padding:"32px 24px",textAlign:"center"}}>
+        <div style={{fontSize:52,marginBottom:20}}>{camError==="permission"?"🔒":"📷"}</div>
+        <div style={{fontSize:18,fontWeight:700,color:"#F0F4FF",marginBottom:10}}>
+          {camError==="permission"?"Cámara bloqueada":"Cámara no disponible"}
+        </div>
+        <div style={{fontSize:13,color:"rgba(240,244,255,0.5)",lineHeight:1.65,marginBottom:28,maxWidth:280}}>
+          {camError==="permission"
+            ? "Permite el acceso a la cámara en la configuración de tu navegador y recarga la página."
+            : "Tu dispositivo no tiene cámara disponible o el navegador no la soporta."}
+        </div>
+        <button onClick={onBack} style={{padding:"13px 32px",borderRadius:14,border:"none",background:"linear-gradient(135deg,#1A6BF5,#1050C8)",color:"#fff",fontFamily:"'Sora',sans-serif",fontSize:14,fontWeight:600,cursor:"pointer"}}>← Volver</button>
+      </div>
+    );
+  }
+
+  return (
+    <div style={{flex:1,position:"relative",background:"#000",overflow:"hidden"}}>
+
+      {/* Live camera */}
+      <video ref={videoRef} id="ar-video" playsInline muted
+        style={{position:"absolute",inset:0,width:"100%",height:"100%",objectFit:"cover",transform:"scale(1)"}}
+      />
+
+      {/* Dark gradient overlays top/bottom for UI readability */}
+      <div style={{position:"absolute",inset:0,pointerEvents:"none",
+        background:"linear-gradient(to bottom,rgba(7,16,31,.5) 0%,transparent 18%,transparent 60%,rgba(7,16,31,.7) 100%)"
+      }}/>
+
+      {/* Scan line sweep */}
+      {camReady && <div className="scan-line"/>}
+
+      {/* Loading overlay */}
+      {!camReady && (
+        <div style={{position:"absolute",inset:0,display:"flex",alignItems:"center",justifyContent:"center",flexDirection:"column",gap:14,zIndex:5}}>
+          <div style={{width:48,height:48,border:"3px solid rgba(26,107,245,0.3)",borderTopColor:"#1A6BF5",borderRadius:"50%",animation:"pulse 1s linear infinite"}}/>
+          <div style={{fontFamily:"'JetBrains Mono',monospace",fontSize:12,color:"rgba(240,244,255,0.6)",letterSpacing:"2px"}}>INICIANDO CÁMARA...</div>
+        </div>
+      )}
+
+      {/* AR Overlays */}
+      {camReady && (
+        <div style={{position:"absolute",inset:0,pointerEvents:"none"}}>
+
+          {/* Floor arrows */}
+          {ARROWS.map(a => (
+            <div key={a.cls} className={a.cls} style={{transform:"translateX(-50%)"}}>
+              <svg width={a.w} height={a.h} style={{filter:`drop-shadow(0 2px 6px rgba(0,0,0,1)) drop-shadow(0 0 2px #000)`}}>
+                <polygon points={a.pts} fill="rgba(0,0,0,1)" stroke="#000" strokeWidth="3"/>
+              </svg>
+            </div>
+          ))}
+
+          {/* Aisle label tag */}
+          <div className="ar-tag">
+            <div style={{fontFamily:"'JetBrains Mono',monospace",fontSize:14,fontWeight:600,color:"#4D8EF7",letterSpacing:"2px",textTransform:"uppercase"}}>
+              <span className="blink-dot"/>{cur.tag}
+            </div>
+            <div style={{fontSize:11,color:"rgba(240,244,255,0.55)",marginTop:3}}>{cur.aisle} · {cur.sect}</div>
+          </div>
+
+          {/* Promo badge */}
+          {cur.promo && (
+            <div className="promo-badge">
+              <span style={{fontSize:13,fontWeight:700}}>{cur.promoTxt}</span>
+              <span style={{fontSize:9,fontWeight:700}}>OFERTA</span>
+            </div>
+          )}
+
+          {/* Distance badge */}
+          <div className="dist-badge">≈ {liveDist !== null ? liveDist : cur.dist} m</div>
+
+          {/* Corner brackets */}
+          <div className="sc sc-tl"/><div className="sc sc-tr"/>
+          <div className="sc sc-bl"/><div className="sc sc-br"/>
+        </div>
+      )}
+
+      {/* HUD top bar */}
+      <div style={S.hud}>
+        <div style={{fontFamily:"'JetBrains Mono',monospace",fontSize:14,fontWeight:700,color:"#4D8EF7"}}>
+          AR<span style={{color:"#fff"}}>Nav</span>
+        </div>
+        <div style={{display:"flex",alignItems:"center",gap:8}}>
+          <div style={{display:"flex",alignItems:"center",background:"rgba(34,212,122,.12)",border:"1px solid rgba(34,212,122,.4)",borderRadius:20,padding:"4px 12px",fontSize:11,color:"#22D47A",fontWeight:600}}>
+            <span className="hud-blink"/>Cámara activa
+          </div>
+          <div onClick={onBack} style={{width:34,height:34,borderRadius:10,border:"1px solid rgba(255,255,255,0.15)",background:"rgba(255,255,255,0.08)",display:"flex",alignItems:"center",justifyContent:"center",cursor:"pointer",fontSize:15,color:"#F0F4FF",pointerEvents:"all"}}>✕</div>
+        </div>
+      </div>
+
+      {/* Bottom panel */}
+      <div style={S.panel}>
+        <div style={{display:"flex",alignItems:"center",gap:12,marginBottom:12}}>
+          <div style={{width:48,height:48,borderRadius:14,flexShrink:0,background:"rgba(26,107,245,.18)",border:"1.5px solid rgba(26,107,245,0.45)",display:"flex",alignItems:"center",justifyContent:"center",fontSize:24}}>{cur.emoji}</div>
+          <div style={{flex:1}}>
+            <div style={{fontSize:10,color:"rgba(240,244,255,0.5)",letterSpacing:1.2,textTransform:"uppercase",marginBottom:2}}>Buscando ahora</div>
+            <div style={{fontSize:16,fontWeight:700,color:"#F0F4FF"}}>{cur.name}</div>
+            <div style={{fontSize:11,color:"#4D8EF7",marginTop:2}}>📍 {cur.aisle} · ≈ {liveDist !== null ? liveDist : cur.dist} m</div>
+          </div>
+        </div>
+
+        {/* Progress */}
+        <div style={{display:"flex",justifyContent:"space-between",fontSize:11,color:"rgba(240,244,255,0.5)",marginBottom:5}}>
+          <span>Progreso de compra</span>
+          <span style={{color:"#4D8EF7",fontFamily:"'JetBrains Mono',monospace"}}>{collected.size} / {queue.length}</span>
+        </div>
+        <div style={{height:4,background:"rgba(255,255,255,.08)",borderRadius:4,overflow:"hidden",marginBottom:11}}>
+          <div style={{height:"100%",width:`${prog}%`,background:"linear-gradient(90deg,#1A6BF5,#4D8EF7)",borderRadius:4,transition:"width .6s ease"}}/>
+        </div>
+
+        {/* Product chips */}
+        <div style={{display:"flex",gap:7,overflowX:"auto",marginBottom:12,paddingBottom:2}}>
+          {queue.map((q,i)=>{
+            const isDone=collected.has(i),isActive=i===qIdx;
+            return (
+              <div key={i} style={{flexShrink:0,padding:"5px 12px",borderRadius:20,fontSize:11,fontWeight:500,whiteSpace:"nowrap",
+                border:`1px solid ${isDone?"rgba(34,212,122,.35)":isActive?"#1A6BF5":"rgba(255,255,255,.10)"}`,
+                background:isDone?"rgba(34,212,122,.10)":isActive?"rgba(26,107,245,.22)":"rgba(255,255,255,.05)",
+                color:isDone?"#22D47A":isActive?"#fff":"rgba(240,244,255,0.5)",
+                textDecoration:isDone?"line-through":"none"}}>
+                {q.emoji} {q.name}
+              </div>
+            );
+          })}
+        </div>
+
+        <button onClick={onCollect} style={S.collectBtn}>
+          {btnOk ? "✓  ¡Marcado como recolectado!" : "✓  Recolectado — marcar ✓"}
+        </button>
+      </div>
+
+      {/* Toast */}
+      {toastOn && (
+        <div style={{position:"absolute",top:72,left:"50%",transform:"translateX(-50%)",
+          background:"rgba(34,212,122,.14)",border:"1px solid rgba(34,212,122,.5)",
+          color:"#22D47A",padding:"9px 22px",borderRadius:24,fontSize:12,fontWeight:600,
+          zIndex:99,whiteSpace:"nowrap",backdropFilter:"blur(12px)"}}>
+          {toast}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ── Main App ───────────────────────────────────────────── */
+function App() {
+  const [screen, setScreen] = useState("welcome");
+  const [selected, setSelected] = useState([]);
+  const [search, setSearch] = useState("");
+  const [customInput, setCustomInput] = useState("");
+  const [queue, setQueue] = useState([]);
+  const [qIdx, setQIdx] = useState(0);
+  const [collected, setCollected] = useState(new Set());
+  const [btnOk, setBtnOk] = useState(false);
+  const [toast, setToast] = useState("");
+  const [toastOn, setToastOn] = useState(false);
+  const [startTime, setStartTime] = useState(0);
+  const [elapsed, setElapsed] = useState(0);
+
+  const showToast = (msg) => { setToast(msg); setToastOn(true); setTimeout(()=>setToastOn(false), 2200); };
+  const toggleItem = (item) => setSelected(prev => prev.some(s=>s.name===item.name) ? prev.filter(s=>s.name!==item.name) : [...prev, item]);
+  const addCustom = () => {
+    if (!customInput.trim()) return;
+    setSelected(prev=>[...prev,{name:customInput.trim(),emoji:"🛍️",aisle:"Pasillo ?",sect:"Sección ?",tag:"General",dist:10,promo:false}]);
+    setCustomInput("");
+  };
+
+  const startAR = (items) => {
+    const q = items || selected;
+    setQueue(q); setQIdx(0); setCollected(new Set()); setStartTime(Date.now()); setBtnOk(false); setScreen("ar");
+  };
+
+  const skipToAR = () => {
+    const demo = CATALOG.map(c=>c.items[0]);
+    setSelected(demo); startAR(demo);
+  };
+
+  const collect = () => {
+    if (btnOk) return;
+    setBtnOk(true);
+    const nc = new Set(collected); nc.add(qIdx); setCollected(nc);
+    showToast("✓ " + queue[qIdx].emoji + " " + queue[qIdx].name + " recolectado");
+    setTimeout(() => {
+      const rem = queue.map((_,i)=>i).filter(i=>!nc.has(i));
+      if (rem.length) { setQIdx(rem[0]); setBtnOk(false); }
+      else { setElapsed(Math.round((Date.now()-startTime)/1000)); setScreen("done"); }
+    }, 900);
+  };
+
+  const restart = () => { setSelected([]); setQueue([]); setQIdx(0); setCollected(new Set()); setBtnOk(false); setSearch(""); setScreen("welcome"); };
+  const fmt = (s) => s > 59 ? Math.floor(s/60)+"m "+s%60+"s" : s+"s";
+  const prog = queue.length ? (collected.size/queue.length)*100 : 0;
+  const cur = queue[qIdx] || {};
+  const filtered = CATALOG.map(c=>({...c,items:c.items.filter(i=>i.name.toLowerCase().includes(search.toLowerCase()))})).filter(c=>c.items.length);
+
+  const S = {
+    wrap:{width:"100%",height:"100vh",background:"#030810",display:"flex",alignItems:"center",justifyContent:"center"},
+    phone:{width:"100%",height:"100vh",background:"#000",position:"relative",overflow:"hidden",display:"flex",flexDirection:"column"},
+    btn:{width:"100%",padding:16,borderRadius:16,border:"none",background:"linear-gradient(135deg,#1A6BF5,#1050C8)",color:"#fff",fontFamily:"'Sora',sans-serif",fontSize:16,fontWeight:600,cursor:"pointer",boxShadow:"0 6px 24px rgba(26,107,245,0.4)"},
+    ghost:{width:"100%",padding:13,borderRadius:14,border:"1px solid rgba(255,255,255,0.10)",background:"none",color:"rgba(240,244,255,0.5)",fontFamily:"'Sora',sans-serif",fontSize:14,cursor:"pointer",marginTop:10},
+  };
+
+  return (
+    <div style={S.wrap}>
+    <div style={S.phone}>
+
+      {/* WELCOME */}
+      {screen==="welcome" && (
+        <div style={{flex:1,background:"radial-gradient(ellipse 120% 80% at 50% 10%,rgba(26,107,245,0.22),transparent 60%),#07101F",display:"flex",flexDirection:"column",alignItems:"center",padding:"52px 24px 36px",overflowY:"auto"}}>
+          <div style={{width:96,height:96,borderRadius:28,background:"linear-gradient(135deg,rgba(26,107,245,0.28),rgba(26,107,245,0.06))",border:"1.5px solid rgba(26,107,245,0.5)",display:"flex",alignItems:"center",justifyContent:"center",fontSize:44,marginBottom:18,animation:"pulse 3s ease-in-out infinite"}}>🛒</div>
+          <div style={{fontFamily:"'JetBrains Mono',monospace",fontSize:10,color:"#4D8EF7",letterSpacing:"2.5px",textTransform:"uppercase",background:"rgba(26,107,245,0.12)",border:"1px solid rgba(26,107,245,0.4)",borderRadius:20,padding:"4px 14px",marginBottom:14}}>ARNav · Cámara Real</div>
+          <h1 style={{fontSize:30,fontWeight:700,textAlign:"center",lineHeight:1.2,marginBottom:10,color:"#F0F4FF"}}>Encuentra todo<br/><span style={{color:"#4D8EF7"}}>sin buscar</span></h1>
+          <p style={{fontSize:13,color:"rgba(240,244,255,0.5)",textAlign:"center",lineHeight:1.65,marginBottom:28,maxWidth:280}}>La app usará tu cámara y te guiará con flechas AR en tiempo real por los pasillos.</p>
+          <div style={{width:"100%",background:"rgba(255,255,255,0.07)",border:"1px solid rgba(255,255,255,0.10)",borderRadius:16,padding:"14px 16px",display:"flex",alignItems:"center",gap:12,marginBottom:"auto"}}>
+            <span style={{fontSize:26}}>🏪</span>
+            <div><div style={{fontSize:13,fontWeight:600,color:"#F0F4FF"}}>Supermercado Central</div><div style={{fontSize:11,color:"rgba(240,244,255,0.5)",marginTop:1}}>Av. Patria 1234 · Zapopan, Jal.</div></div>
+            <div style={{marginLeft:"auto",fontSize:11,color:"#22D47A",fontWeight:600,whiteSpace:"nowrap"}}>● Abierto</div>
+          </div>
+          <button style={S.btn} onClick={()=>setScreen("list")}>Hacer mi lista →</button>
+          <button style={S.ghost} onClick={skipToAR}>Demo AR rápido (sin lista)</button>
+        </div>
+      )}
+
+      {/* LIST */}
+      {screen==="list" && (
+        <div style={{flex:1,background:"#07101F",display:"flex",flexDirection:"column",overflow:"hidden"}}>
+          <div style={{padding:"48px 20px 0",flexShrink:0}}>
+            <div style={{display:"flex",alignItems:"center",gap:12,marginBottom:18}}>
+              <div onClick={()=>setScreen("welcome")} style={{width:38,height:38,borderRadius:11,border:"1px solid rgba(255,255,255,0.10)",background:"rgba(255,255,255,0.07)",display:"flex",alignItems:"center",justifyContent:"center",cursor:"pointer",fontSize:16,color:"#F0F4FF",flexShrink:0}}>←</div>
+              <div><div style={{fontSize:20,fontWeight:700,color:"#F0F4FF"}}>Mi lista de compras</div><div style={{fontSize:11,color:"rgba(240,244,255,0.5)",marginTop:2}}>Selecciona los productos</div></div>
+            </div>
+            <div style={{display:"flex",alignItems:"center",gap:10,background:"rgba(255,255,255,0.07)",border:"1px solid rgba(255,255,255,0.10)",borderRadius:12,padding:"11px 16px",marginBottom:10}}>
+              <span style={{color:"rgba(240,244,255,0.5)"}}>🔍</span>
+              <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Buscar producto..." style={{flex:1,background:"none",border:"none",outline:"none",color:"#F0F4FF",fontFamily:"'Sora',sans-serif",fontSize:14}}/>
+            </div>
+            <div style={{display:"flex",gap:8,marginBottom:12}}>
+              <input value={customInput} onChange={e=>setCustomInput(e.target.value)} onKeyDown={e=>e.key==="Enter"&&addCustom()} placeholder="Agregar otro producto..." style={{flex:1,background:"rgba(255,255,255,0.07)",border:"1px solid rgba(255,255,255,0.10)",borderRadius:11,padding:"10px 14px",color:"#F0F4FF",fontFamily:"'Sora',sans-serif",fontSize:13,outline:"none"}}/>
+              <button onClick={addCustom} style={{width:44,height:44,borderRadius:11,border:"none",background:"#1A6BF5",color:"#fff",fontSize:20,cursor:"pointer",flexShrink:0}}>+</button>
+            </div>
+          </div>
+          <div style={{flex:1,overflowY:"auto",padding:"0 20px"}}>
+            {filtered.map(cat=>(
+              <div key={cat.cat}>
+                <div style={{fontFamily:"'JetBrains Mono',monospace",fontSize:10,letterSpacing:"2px",color:"rgba(240,244,255,0.5)",textTransform:"uppercase",margin:"14px 0 7px"}}>{cat.cat}</div>
+                {cat.items.map(item=>{
+                  const isSel=selected.some(s=>s.name===item.name);
+                  return (
+                    <div key={item.name} onClick={()=>toggleItem(item)} style={{display:"flex",alignItems:"center",gap:12,background:isSel?"rgba(26,107,245,0.10)":"rgba(255,255,255,0.04)",border:`1px solid ${isSel?"rgba(26,107,245,0.4)":"rgba(255,255,255,0.10)"}`,borderRadius:12,padding:"11px 14px",marginBottom:7,cursor:"pointer",position:"relative",overflow:"hidden"}}>
+                      <div style={{position:"absolute",left:0,top:0,bottom:0,width:3,background:isSel?"#1A6BF5":"rgba(240,244,255,0.18)",borderRadius:"3px 0 0 3px"}}/>
+                      <span style={{fontSize:22,flexShrink:0}}>{item.emoji}</span>
+                      <div style={{flex:1}}>
+                        <div style={{fontSize:13,fontWeight:500,color:"#F0F4FF"}}>{item.name}</div>
+                        <div style={{fontSize:11,color:"rgba(240,244,255,0.5)",marginTop:1}}>📍 {item.aisle} · {item.sect}</div>
+                        {item.promo&&<div style={{fontSize:10,color:"#F59E0B",fontWeight:600,marginTop:2}}>🏷️ Promoción: {item.promoTxt} hoy</div>}
+                      </div>
+                      <div style={{width:22,height:22,borderRadius:7,border:`2px solid ${isSel?"#1A6BF5":"rgba(255,255,255,0.10)"}`,background:isSel?"#1A6BF5":"none",display:"flex",alignItems:"center",justifyContent:"center",fontSize:12,color:"#fff",flexShrink:0}}>{isSel?"✓":""}</div>
+                    </div>
+                  );
+                })}
+              </div>
+            ))}
+            <div style={{height:16}}/>
+          </div>
+          <div style={{padding:"14px 20px 28px",background:"#07101F",borderTop:"1px solid rgba(255,255,255,0.10)",flexShrink:0}}>
+            <div style={{fontSize:12,color:"rgba(240,244,255,0.5)",marginBottom:10}}><strong style={{color:"#F0F4FF"}}>{selected.length}</strong> productos seleccionados</div>
+            {selected.length>0&&<div style={{display:"flex",gap:6,flexWrap:"wrap",marginBottom:12}}>{selected.map(s=><span key={s.name} style={{fontSize:11,padding:"3px 10px",borderRadius:20,background:"rgba(26,107,245,0.14)",border:"1px solid rgba(26,107,245,0.4)",color:"#4D8EF7"}}>{s.emoji} {s.name}</span>)}</div>}
+            <button onClick={()=>startAR()} disabled={!selected.length} style={{...S.btn,opacity:selected.length?1:0.4,cursor:selected.length?"pointer":"not-allowed",background:selected.length?"linear-gradient(135deg,#1A6BF5,#1050C8)":"rgba(255,255,255,0.1)"}}>Activar Navegación AR →</button>
+          </div>
+        </div>
+      )}
+
+      {/* AR — real camera */}
+      {screen==="ar" && (
+        <CameraView
+          cur={cur} queue={queue} qIdx={qIdx} collected={collected}
+          btnOk={btnOk} toastOn={toastOn} toast={toast} prog={prog}
+          onCollect={collect}
+          onBack={()=>setScreen("list")}
+        />
+      )}
+
+      {/* DONE */}
+      {screen==="done" && (
+        <div style={{flex:1,background:"radial-gradient(ellipse 90% 60% at 50% 30%,rgba(34,212,122,.14),transparent 70%),#07101F",display:"flex",flexDirection:"column",alignItems:"center",padding:"48px 28px 36px",overflowY:"auto"}}>
+          <div className="done-ring" style={{width:100,height:100,borderRadius:"50%",background:"linear-gradient(135deg,rgba(34,212,122,.25),rgba(34,212,122,.06))",border:"2px solid rgba(34,212,122,.5)",display:"flex",alignItems:"center",justifyContent:"center",fontSize:44,marginBottom:20,boxShadow:"0 0 50px rgba(34,212,122,.22)"}}>✓</div>
+          <h2 style={{fontSize:24,fontWeight:700,marginBottom:8,textAlign:"center",color:"#F0F4FF"}}>¡Compra completada!</h2>
+          <p style={{fontSize:13,color:"rgba(240,244,255,0.5)",textAlign:"center",lineHeight:1.6,marginBottom:24}}>Encontraste todos tus productos con navegación AR.</p>
+          <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:10,width:"100%",marginBottom:20}}>
+            {[{val:queue.length,lbl:"Productos"},{val:fmt(elapsed),lbl:"Tiempo"},{val:"AR 📷",lbl:"Modo"}].map(s=>(
+              <div key={s.lbl} style={{background:"rgba(255,255,255,0.07)",border:"1px solid rgba(255,255,255,0.10)",borderRadius:14,padding:"14px 8px",textAlign:"center"}}>
+                <div style={{fontSize:18,fontWeight:700,color:"#4D8EF7",fontFamily:"'JetBrains Mono',monospace"}}>{s.val}</div>
+                <div style={{fontSize:10,color:"rgba(240,244,255,0.5)",marginTop:3,textTransform:"uppercase",letterSpacing:1}}>{s.lbl}</div>
+              </div>
+            ))}
+          </div>
+          <div style={{width:"100%",background:"rgba(255,255,255,0.07)",border:"1px solid rgba(255,255,255,0.10)",borderRadius:14,padding:"12px 14px",marginBottom:22}}>
+            {queue.map((q,i)=>(
+              <div key={i} style={{display:"flex",alignItems:"center",gap:10,padding:"7px 0",borderBottom:i<queue.length-1?"1px solid rgba(255,255,255,0.10)":"none"}}>
+                <span style={{color:"#22D47A",fontSize:13}}>✓</span>
+                <span style={{fontSize:18}}>{q.emoji}</span>
+                <span style={{fontSize:13,fontWeight:500,color:"#F0F4FF"}}>{q.name}</span>
+                <span style={{fontSize:11,color:"rgba(240,244,255,0.5)",marginLeft:"auto"}}>{q.aisle}</span>
+              </div>
+            ))}
+          </div>
+          <button style={S.btn} onClick={restart}>Nueva compra →</button>
+        </div>
+      )}
+
+    </div>
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<App/>);
+</script>
+</body>
+</html>
